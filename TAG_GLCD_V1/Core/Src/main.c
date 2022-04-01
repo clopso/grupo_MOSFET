@@ -25,6 +25,7 @@
 #include "delay.h"
 #include "bitmap.h"
 #include "MFRC522.h"
+#include "string.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -34,6 +35,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define END_INICIAL 0x08006000 // Pag. 18 | Max (pag 63): 0x08018C00
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -65,14 +67,56 @@ uint8_t status =144;
 uint8_t str[5];
 uint8_t cardstr[3];
 uint8_t login[10][5];
-uint8_t flagCadrst=0, qntsUser=0, estaCadrst=0;
+uint8_t flagCadrst=0, qntsUser=0, flagGraph=0, ValorLeitura=0;
 
-void LimpaTag(uint8_t a[5]){
-	for(int i=0; i < 5; i++){
-		a[i] = 0x00;
+//Compara um vetor com a database de TAGS
+uint8_t comparaTag(uint8_t *comp){
+	uint8_t i = 0;
+
+	for (uint8_t x = 0; x < 10; ++x) {
+		while(comp[i] == login[x][i] && i < 5) {i++;}
 	}
+	if(i == 5){return 1;}
+	return 0;
 }
 
+//Le a tag
+void leTag(){
+	  status = MFRC522_Request(PICC_REQIDL, cardstr);
+	  if( status == 0){
+		  status = MFRC522_Anticoll(str);
+	  }
+}
+
+//Limpa a tag recebida
+void limpaTag(uint8_t *a){
+	for(int i=0; i < 5; i++){a[i] = 0x0;}
+}
+
+//Verifica o GraphicMode do GLCD
+void verificaGMode(uint8_t mode){
+	// GMODE 0
+	if(mode == 0 && flagGraph == 1){
+		flagGraph = 0;
+		ST7920_Clear();
+		ST7920_GraphicMode(0);
+	}
+	else if(mode == 0 && flagGraph == 0){
+		flagGraph = 0;
+		ST7920_Clear();
+	}
+
+	// GMODE 1
+	else if(mode == 1 && flagGraph == 0){
+		flagGraph = 1;
+		ST7920_Clear();
+		ST7920_GraphicMode(1);
+	}
+	else if(mode == 1 && flagGraph == 1){
+		flagGraph = 1;
+		return;
+	}
+}
 
 void piscar(){
 	ST7920_DrawBitmap(kawaideado_i);
@@ -92,8 +136,6 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 
 	case 1:
 		flagCadrst = 0;
-		  ST7920_Clear();
-		  ST7920_GraphicMode(1);
 		break;
 	}
 }
@@ -131,14 +173,23 @@ int main(void)
   MX_SPI1_Init();
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
+  //inicia
   delay_init();
   ST7920_Init();
+  MFRC522_Init();
+
   ST7920_GraphicMode(1);
+
   ST7920_DrawBitmap(foto_mosfet);
   HAL_Delay(1000);
-  MFRC522_Init();
-  HAL_Delay(300);
   status = Read_MFRC522(VersionReg);
+
+  for (uint8_t x = 0; x < 10; ++x) {
+	  for (uint8_t y = 0; y < 5; ++y) {
+		  login[x][y] = 0xFF;
+	  }
+  }
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -146,48 +197,54 @@ int main(void)
   while (1)
   {
 	  //importante
-	  status = MFRC522_Request(PICC_REQIDL, cardstr);
-	  if( status == 0){
-		  status = MFRC522_Anticoll(str);
-	  }
+	  leTag();
 
+	  //Ativa o modo cadastro
 	  if(flagCadrst == 1){
-		  ST7920_Clear();
-		  ST7920_GraphicMode(0);
-		  ST7920_SendString(1, 2, "Cadastro");
-		  ST7920_SendString(2, 0, "Aproxime a TAG");
+		  verificaGMode(0);
 
-		  //Verifica se leu alguma coisa
-		  if(str[0] != 0x00){
-			  //Verifica se a TAG já foi cadastrada
-			  for(uint8_t y = 0; y < 10; ++y){
-				  if(str[0] == login[y][0]){
-					  ST7920_Clear();
+		  //Enquanto o modo cadastro estiver ativado
+		  while(flagCadrst == 1){
+			  leTag();
+			  ST7920_SendString(1, 2, "Cadastro!");
+			  ST7920_SendString(2, 0, "Aproxime a TAG");
+
+			  //Verifica se está lendo alguma coisa
+			  if(str[0] != 0x00){
+				  if(comparaTag(str) == 1){
+					  verificaGMode(0);
 					  ST7920_SendString(1, 2, "ERRO!");
-					  ST7920_SendString(2, 0, "TAG cadastrada");
+					  ST7920_SendString(2, 0, "TAG CADASTRADA");
 					  HAL_Delay(500);
-					  estaCadrst = 0;
-					  break;
 				  }
-				  else{
-					  estaCadrst = 1;
+				  else if(comparaTag(str) == 0){
+					  for (uint8_t j = 0; j < 5; ++j) {
+						  login[qntsUser][j] = str[j];
+					  }
+					  qntsUser++;
+
+					  verificaGMode(1);
+					  love();
+					  flagCadrst = 0;
 				  }
-			  }
-			  if(estaCadrst == 1){
-				  for (uint8_t x = 0; x < 5; ++x) {
-					  login[qntsUser][x] = str[x];
-				  }
-				  flagCadrst=0;
-				  ST7920_Clear();
-				  ST7920_GraphicMode(1);
-				  love();
-				  qntsUser++;
+			  limpaTag(str);
 			  }
 		  }
+	  }else {
+		  verificaGMode(1);
 
-		  LimpaTag(str);
-	  }else{
-		  ST7920_DrawBitmap(kawaideado_c);
+		  while(flagCadrst == 0){
+			  leTag();
+
+			  if(str[0] != 0x00){
+				  if(comparaTag(str) == 1){
+					  piscar();
+				  }
+				  limpaTag(str);
+			  }
+
+			  ST7920_DrawBitmap(kawaideado_c);
+		  }
 	  }
     /* USER CODE END WHILE */
 
